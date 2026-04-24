@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# Build and temp
+build/
+dist/
+!vm-idalib-launcher/dist/.gitkeep
+*.log
+*.tmp
+*.bak
+stdin.txt
+out.txt
+
+# PyInstaller outputs (large binaries belong in GitHub Releases)
+*.exe
+*.spec.bak
+
+# OS
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
+.idea/
+
+# Node / docs (just in case)
+node_modules/
