@@ -136,7 +136,7 @@ def main(vm_ip: str, vm_port: int, host_file: str) -> None:
 
     skip_upload = os.environ.get("SKIP_UPLOAD")
     if skip_upload:
-        up = {"path": skip_upload, "size": os.path.getsize(HOST_FILE)}
+        up = {"path": skip_upload, "size": os.path.getsize(host_file)}
         print(f"[test] SKIP_UPLOAD set; reusing VM path {up['path']}")
     else:
         print("[test] computing host sha256 ...")
