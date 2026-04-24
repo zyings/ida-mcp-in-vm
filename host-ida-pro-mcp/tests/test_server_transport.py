@@ -5,13 +5,20 @@ from ida_pro_mcp import server
 
 
 class _FakeResponse:
-    def __init__(self, status=200, reason="OK", body=b'{"jsonrpc":"2.0","result":{"ok":true},"id":1}'):
+    def __init__(self, status=200, reason="OK", body=b'{"jsonrpc":"2.0","result":{"ok":true},"id":1}', headers=None):
         self.status = status
         self.reason = reason
         self._body = body
+        self._headers = {k.lower(): v for k, v in (headers or {}).items()}
 
     def read(self):
         return self._body
+
+    def getheader(self, name, default=None):
+        return self._headers.get(name.lower(), default)
+
+    def getheaders(self):
+        return list(self._headers.items())
 
 
 class _BaseFakeConnection:
@@ -79,9 +86,13 @@ class DispatchProxyTransportTests(unittest.TestCase):
         self.assertIsNotNone(response)
         self.assertIn("error", response)
         self.assertIn("HTTP 503 Service Unavailable", response["error"]["data"])
-        self.assertEqual(len(_Http503Connection.instances), 1)
-        self.assertEqual(_Http503Connection.instances[0].request_calls, 1)
-        self.assertTrue(_Http503Connection.instances[0].closed)
+        # Two connections are expected: one for the session handshake
+        # (initialize) and one for the actual forwarded request. Each
+        # individual request must not be retried.
+        self.assertEqual(len(_Http503Connection.instances), 2)
+        for instance in _Http503Connection.instances:
+            self.assertEqual(instance.request_calls, 1)
+            self.assertTrue(instance.closed)
 
     def test_dispatch_proxy_does_not_retry_connection_failures(self):
         request = {"jsonrpc": "2.0", "method": "tools/call", "params": {}, "id": 1}

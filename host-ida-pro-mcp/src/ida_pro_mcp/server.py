@@ -261,6 +261,11 @@ def _forward_tools_call(name: str, arguments: dict) -> dict:
     """Call a tool that lives on the IDA plugin side via JSON-RPC.
 
     Returns the structuredContent / parsed result. Raises on transport error.
+
+    Uses the same session-handshake + SSE-aware parsing as ``dispatch_proxy``
+    so that host-local tools (e.g. ``idalib_open_from_host``) work against a
+    VM that runs in ``--isolated-contexts`` mode (where ``Mcp-Session-Id`` is
+    required) or that answers ``/mcp`` with ``text/event-stream``.
     """
     req = {
         "jsonrpc": "2.0",
@@ -269,16 +274,32 @@ def _forward_tools_call(name: str, arguments: dict) -> dict:
         "params": {"name": name, "arguments": arguments},
     }
     payload = json.dumps(req).encode("utf-8")
-    conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=600)
-    try:
-        conn.request("POST", "/mcp", payload, {"Content-Type": "application/json"})
-        resp = conn.getresponse()
-        raw = resp.read().decode()
-        if resp.status >= 400:
-            raise RuntimeError(f"HTTP {resp.status}: {raw}")
-    finally:
-        conn.close()
-    rpc = json.loads(raw)
+
+    def _do_request(session_id: Optional[str]) -> tuple[int, str, bytes]:
+        conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=600)
+        try:
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+            }
+            if session_id:
+                headers["Mcp-Session-Id"] = session_id
+            conn.request("POST", "/mcp", payload, headers)
+            resp = conn.getresponse()
+            return resp.status, resp.reason, resp.read()
+        finally:
+            conn.close()
+
+    sid = _ensure_remote_session()
+    status, reason, raw = _do_request(sid)
+    # If the remote rotated the session or our cached one expired, retry once.
+    if status == 400 and (b"Mcp-Session-Id" in raw or b"session" in raw.lower()):
+        sid = _ensure_remote_session(force=True)
+        status, reason, raw = _do_request(sid)
+    if status >= 400:
+        raise RuntimeError(f"HTTP {status} {reason}: {raw.decode('utf-8', 'replace')}")
+
+    rpc = _parse_mcp_response(raw)
     if "error" in rpc and rpc["error"]:
         raise RuntimeError(f"RPC error: {rpc['error']}")
     result = rpc.get("result") or {}
