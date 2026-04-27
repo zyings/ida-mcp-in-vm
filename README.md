@@ -31,7 +31,7 @@ on host" use case.
 
 ## Repository layout
 
-- host-ida-pro-mcp/
+- ida-pro-mcp/
   - Modified ida-pro-mcp source code.
   - Includes `vm_upload`, `vm_download`, `vm_stat`, `vm_tempdir`.
   - Includes `idalib_open_from_host` for upload-and-open in one call.
@@ -50,7 +50,7 @@ on host" use case.
 
 ### 2. Host side
 
-- Install the package from `host-ida-pro-mcp/`.
+- Install the package from `ida-pro-mcp/`.
 - Configure your MCP client to connect to `http://<vm-ip>:13777`.
 - Use tools such as:
   - `idalib_open_from_host`
@@ -61,7 +61,7 @@ on host" use case.
 
 #### Install commands
 
-Run in `host-ida-pro-mcp/`:
+Run in `ida-pro-mcp/`:
 
 ```powershell
 # Recommended: editable install
@@ -117,7 +117,7 @@ Windows absolute interpreter path example:
 
 ### 3. Smoke test
 
-Run from `host-ida-pro-mcp/`:
+Run from `ida-pro-mcp/`:
 
 ```powershell
 python scripts/live_test_vmfs.py --vm-ip <vm-ip> --port 13777

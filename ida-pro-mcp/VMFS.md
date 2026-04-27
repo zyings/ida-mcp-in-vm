@@ -88,19 +88,7 @@ ida-pro-mcp --install --ida-rpc http://192.168.56.10:13337
 This generates the MCP client config (Claude / Cursor / VS Code Copilot /
 etc.) with the right endpoint baked in. Restart the MCP client.
 
-### 5. Smoke-test the pipeline (no IDA required)
-
-A self-contained loopback test exists that exercises only the VMFS layer:
-
-```powershell
-# on host
-cd ida-pro-mcp
-python src\ida_pro_mcp\tests\test_vmfs.py
-```
-
-Expect `[test] OK` at the end.
-
-### 6. End-to-end test with IDA
+### 5. End-to-end test with IDA
 
 From your MCP client (e.g. a chat window):
 
