@@ -1,0 +1,1 @@
+Missing Mcp-Session-Id header. Call initialize first and reuse the returned Mcp-Session-Id.

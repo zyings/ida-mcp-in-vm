@@ -10,6 +10,10 @@ venv/
 env/
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # Build and temp
 build/
@@ -35,3 +39,14 @@ Thumbs.db
 
 # Node / docs (just in case)
 node_modules/
+
+# Tooling local config
+.claude/
+
+# ida-pro-mcp build artifacts / bundles
+ida-pro-mcp/offline_packages/
+ida-pro-mcp/offline_packages.zip
+ida-pro-mcp/mcp_init_test.bin
+ida-pro-mcp/devdocs/
+ida-pro-mcp/tests/
+ida-pro-mcp/src/ida_pro_mcp/tests/
