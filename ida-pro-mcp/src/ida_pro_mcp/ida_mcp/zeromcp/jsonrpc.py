@@ -9,6 +9,19 @@ from types import UnionType
 
 JsonRpcId: TypeAlias = str | int | float | None
 
+
+def _safe_print(*args, **kwargs) -> None:
+    """print() wrapper that silently swallows I/O errors.
+
+    On Windows, writing to IDA's output window can raise
+    OSError(22) (EINVAL) in certain states.  A logging failure
+    must never corrupt a successful tool-call response.
+    """
+    try:
+        print(*args, **kwargs)
+    except OSError:
+        pass
+
 # Thread-local storage for current request context (ID + cancel event)
 _current_request = threading.local()
 
@@ -138,7 +151,7 @@ class JsonRpcRegistry:
             params_str = json.dumps(params, default=str)
             if len(params_str) > 200:
                 params_str = params_str[:200] + "..."
-            print(f"[MCP] >> {method}({params_str})")
+            _safe_print(f"[MCP] >> {method}({params_str})")
 
         # Set current request ID in thread-local for cancellation tracking
         _current_request.id = request_id
@@ -150,7 +163,7 @@ class JsonRpcRegistry:
                 result_str = json.dumps(result, default=str)
                 if len(result_str) > 200:
                     result_str = result_str[:200] + "..."
-                print(f"[MCP] << {method} ({elapsed_ms:.1f}ms) {result_str}")
+                _safe_print(f"[MCP] << {method} ({elapsed_ms:.1f}ms) {result_str}")
             if is_notification:
                 return None
             return {
@@ -161,7 +174,7 @@ class JsonRpcRegistry:
         except JsonRpcException as e:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             if log_method:
-                print(f"[MCP] << {method} ({elapsed_ms:.1f}ms) ERROR: {e.message}")
+                _safe_print(f"[MCP] << {method} ({elapsed_ms:.1f}ms) ERROR: {e.message}")
             if is_notification:
                 return None
             return self._error(request_id, e.code, e.message, e.data)
@@ -169,14 +182,14 @@ class JsonRpcRegistry:
             # LSP error code -32800: Request cancelled
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             if log_method:
-                print(f"[MCP] << {method} ({elapsed_ms:.1f}ms) CANCELLED")
+                _safe_print(f"[MCP] << {method} ({elapsed_ms:.1f}ms) CANCELLED")
             if is_notification:
                 return None
             return self._error(request_id, -32800, str(e) or "Request cancelled")
         except Exception as e:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             if log_method:
-                print(f"[MCP] << {method} ({elapsed_ms:.1f}ms) EXCEPTION: {e}")
+                _safe_print(f"[MCP] << {method} ({elapsed_ms:.1f}ms) EXCEPTION: {e}")
             if is_notification:
                 return None
             error = self.map_exception(e)
