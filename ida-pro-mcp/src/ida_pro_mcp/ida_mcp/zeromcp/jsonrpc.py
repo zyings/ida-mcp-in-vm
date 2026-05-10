@@ -11,15 +11,16 @@ JsonRpcId: TypeAlias = str | int | float | None
 
 
 def _safe_print(*args, **kwargs) -> None:
-    """print() wrapper that silently swallows I/O errors.
+    """print() wrapper that silently swallows logging I/O errors.
 
     On Windows, writing to IDA's output window can raise
-    OSError(22) (EINVAL) in certain states.  A logging failure
-    must never corrupt a successful tool-call response.
+    OSError(22) (EINVAL) in certain states. Closed pipes/streams may
+    raise ValueError. A logging failure must never corrupt a successful
+    tool-call response.
     """
     try:
         print(*args, **kwargs)
-    except OSError:
+    except (OSError, ValueError):
         pass
 
 # Thread-local storage for current request context (ID + cancel event)

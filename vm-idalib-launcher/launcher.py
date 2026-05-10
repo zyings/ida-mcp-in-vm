@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import os
 import queue
-import signal
 import subprocess
 import sys
 import threading
@@ -41,6 +40,7 @@ def run_gui() -> None:
         "proc": None,
         "reader": None,
         "log_queue": queue.Queue(),
+        "stopping": False,
     }
 
     frm = ttk.Frame(root, padding=10)
@@ -169,11 +169,18 @@ def run_gui() -> None:
             state["log_queue"].put(f"[reader error] {e}\n")
         finally:
             rc = proc.wait()
-            state["log_queue"].put(f"\n[server exited, code={rc}]\n")
-            root.after(0, on_server_exit)
+            if state.get("stopping"):
+                state["log_queue"].put(f"\n[server stopped, code={rc}]\n")
+            else:
+                state["log_queue"].put(f"\n[server exited, code={rc}]\n")
+            try:
+                root.after(0, on_server_exit)
+            except tk.TclError:
+                pass
 
     def on_server_exit() -> None:
         state["proc"] = None
+        state["stopping"] = False
         start_btn.config(state="normal")
         stop_btn.config(state="disabled")
         status_var.set("Stopped")
@@ -229,6 +236,7 @@ def run_gui() -> None:
             return
 
         state["proc"] = proc
+        state["stopping"] = False
         t = threading.Thread(target=reader_thread, args=(proc,), daemon=True)
         t.start()
         state["reader"] = t
@@ -241,17 +249,23 @@ def run_gui() -> None:
         if proc is None:
             return
         status_var.set("Stopping…")
+        state["stopping"] = True
         try:
-            if os.name == "nt":
-                proc.send_signal(signal.CTRL_BREAK_EVENT)
-            else:
+            if proc.poll() is None:
+                # Windowed PyInstaller launchers have no console. Sending
+                # CTRL_BREAK_EVENT calls os.kill() on Windows and can raise
+                # SystemError("<built-in function kill> ...") instead of
+                # stopping the child. terminate() is the reliable path here.
                 proc.terminate()
         except Exception as e:
-            append_log(f"[stop error] {e}\n")
+            append_log(f"[stop warning] terminate failed: {e}\n")
 
         def force_kill_after():
             if state["proc"] is proc and proc.poll() is None:
-                proc.kill()
+                try:
+                    proc.kill()
+                except Exception as e:
+                    append_log(f"[force kill warning] kill failed: {e}\n")
 
         root.after(3000, force_kill_after)
 

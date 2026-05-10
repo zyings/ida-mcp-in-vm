@@ -16,7 +16,7 @@ from types import UnionType
 from urllib.parse import urlparse, parse_qs
 from io import BufferedIOBase
 
-from .jsonrpc import JsonRpcRegistry, JsonRpcError, JsonRpcException, get_current_request_id, register_pending_request, unregister_pending_request, cancel_request
+from .jsonrpc import JsonRpcRegistry, JsonRpcError, JsonRpcException, get_current_request_id, register_pending_request, unregister_pending_request, cancel_request, _safe_print
 
 class McpToolError(Exception):
     def __init__(self, message: str):
@@ -313,7 +313,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
                     )
                     return
                 if not self.mcp_server.has_http_session(mcp_session_id):
-                    print(
+                    _safe_print(
                         f"[MCP] Re-registering HTTP session {mcp_session_id} after reconnect"
                     )
                     self.mcp_server.register_http_session(mcp_session_id)
@@ -401,7 +401,7 @@ class McpServer:
 
     def serve(self, host: str, port: int, *, background = True, request_handler = McpHttpRequestHandler):
         if self._running:
-            print("[MCP] Server is already running")
+            _safe_print("[MCP] Server is already running")
             return
 
         # Create server with deferred binding
@@ -433,16 +433,16 @@ class McpServer:
         # Only start thread after successful bind
         self._running = True
 
-        print("[MCP] Server started:")
-        print(f"  Streamable HTTP: http://{host}:{port}/mcp")
-        print(f"  SSE: http://{host}:{port}/sse")
+        _safe_print("[MCP] Server started:")
+        _safe_print(f"  Streamable HTTP: http://{host}:{port}/mcp")
+        _safe_print(f"  SSE: http://{host}:{port}/sse")
 
         def serve_forever():
             try:
                 self._http_server.serve_forever() # type: ignore
             except Exception as e:
-                print(f"[MCP] Server error: {e}")
-                traceback.print_exc()
+                _safe_print(f"[MCP] Server error: {e}")
+                _safe_print(traceback.format_exc())
             finally:
                 self._running = False
 
@@ -475,7 +475,7 @@ class McpServer:
             self._server_thread.join()
             self._server_thread = None
 
-        print("[MCP] Server stopped")
+        _safe_print("[MCP] Server stopped")
 
     def stdio(self, stdin: BinaryIO | None = None, stdout: BinaryIO | None = None):
         stdin = stdin or sys.stdin.buffer
@@ -604,7 +604,7 @@ class McpServer:
     def _mcp_notifications_cancelled(self, requestId: int | str, reason: str | None = None) -> None:
         """MCP notifications/cancelled - cancel an in-flight request"""
         if cancel_request(requestId):
-            print(f"[MCP] Cancelled request {requestId}: {reason or 'no reason'}")
+            _safe_print(f"[MCP] Cancelled request {requestId}: {reason or 'no reason'}")
         # Notifications don't return a response
 
     def _mcp_resources_list(self, _meta: dict | None = None) -> dict:
