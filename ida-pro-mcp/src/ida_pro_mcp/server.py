@@ -6,6 +6,7 @@ import io
 import json
 import os
 import sys
+import threading
 import traceback
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import urlparse, urlencode
@@ -27,6 +28,139 @@ except ImportError:
 
 IDA_HOST = "127.0.0.1"
 IDA_PORT = 13337
+
+# --------------------------------------------------------------------------
+# Streamable-HTTP MCP session handshake state for talking to the VM endpoint.
+# When the VM launcher runs with --isolated-contexts (or any future build that
+# enables session semantics by default), every POST to /mcp must carry a valid
+# Mcp-Session-Id obtained from a prior `initialize` call. We perform that
+# handshake lazily and cache the session id for subsequent forwarded requests.
+# --------------------------------------------------------------------------
+_VM_SESSION_ID: Optional[str] = None
+_VM_SESSION_LOCK = threading.Lock()
+_MCP_PROTOCOL_VERSION = "2025-03-26"
+
+
+def _read_mcp_response(resp: "http.client.HTTPResponse") -> tuple[int, dict[str, str], bytes, Optional[dict]]:
+    """Read an MCP HTTP response.
+
+    Returns (status, headers_lower, raw_body, parsed_json_or_none).
+    Handles both `application/json` and `text/event-stream` (SSE) content
+    types — the streamable HTTP transport may pick either.
+    """
+    raw = resp.read()
+    headers = {k.lower(): v for k, v in resp.getheaders()}
+    ctype = headers.get("content-type", "")
+    parsed: Optional[dict] = None
+    if "application/json" in ctype:
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except Exception:
+            parsed = None
+    elif "text/event-stream" in ctype:
+        # Take the LAST `data: {...}` line — that's the JSON-RPC reply.
+        for line in raw.decode("utf-8", errors="replace").splitlines():
+            if line.startswith("data:"):
+                payload = line[5:].strip()
+                if payload:
+                    try:
+                        parsed = json.loads(payload)
+                    except Exception:
+                        pass
+    return resp.status, headers, raw, parsed
+
+
+def _initialize_vm_session() -> Optional[str]:
+    """Perform an MCP `initialize` handshake with the VM and return the
+    `Mcp-Session-Id` header (or None if the VM doesn't use sessions)."""
+    init_req = {
+        "jsonrpc": "2.0",
+        "id": "_host_init",
+        "method": "initialize",
+        "params": {
+            "protocolVersion": _MCP_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "ida-pro-mcp-host-proxy", "version": "2.0.0"},
+        },
+    }
+    body = json.dumps(init_req).encode("utf-8")
+    conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)
+    try:
+        conn.request(
+            "POST", "/mcp", body,
+            {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+            },
+        )
+        resp = conn.getresponse()
+        status, headers, raw, _ = _read_mcp_response(resp)
+        sid = headers.get("mcp-session-id")
+        if status >= 400:
+            raise RuntimeError(f"VM initialize failed: HTTP {status} {raw[:200]!r}")
+    finally:
+        conn.close()
+
+    if sid:
+        # Send the required initialized notification with the new session id.
+        note = {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
+        body2 = json.dumps(note).encode("utf-8")
+        conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)
+        try:
+            conn.request(
+                "POST", "/mcp", body2,
+                {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                    "Mcp-Session-Id": sid,
+                },
+            )
+            conn.getresponse().read()
+        finally:
+            conn.close()
+    return sid
+
+
+def _get_vm_session_id(force_refresh: bool = False) -> Optional[str]:
+    global _VM_SESSION_ID
+    if force_refresh:
+        with _VM_SESSION_LOCK:
+            _VM_SESSION_ID = None
+    if _VM_SESSION_ID is None:
+        with _VM_SESSION_LOCK:
+            if _VM_SESSION_ID is None:
+                _VM_SESSION_ID = _initialize_vm_session()
+    return _VM_SESSION_ID
+
+
+def _post_mcp(payload: bytes, *, _retry: bool = True) -> tuple[int, dict[str, str], bytes, Optional[dict]]:
+    """POST a JSON-RPC payload to the VM /mcp endpoint, attaching the cached
+    session id (auto-handshaking if needed). Retries once on 400/404 by
+    re-running initialize, in case the remote session expired."""
+    sid = _get_vm_session_id()
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    if sid:
+        headers["Mcp-Session-Id"] = sid
+
+    conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=600)
+    try:
+        conn.request("POST", "/mcp", payload, headers)
+        resp = conn.getresponse()
+        result = _read_mcp_response(resp)
+    finally:
+        conn.close()
+
+    status = result[0]
+    raw = result[2]
+    if _retry and status in (400, 404) and (b"Session" in raw or b"session" in raw):
+        # Session expired or never established — refresh and retry once.
+        _get_vm_session_id(force_refresh=True)
+        return _post_mcp(payload, _retry=False)
+    return result
+
 
 mcp = McpServer("ida-pro-mcp")
 dispatch_original = mcp.registry.dispatch
@@ -261,16 +395,14 @@ def _forward_tools_call(name: str, arguments: dict) -> dict:
         "params": {"name": name, "arguments": arguments},
     }
     payload = json.dumps(req).encode("utf-8")
-    conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=600)
-    try:
-        conn.request("POST", "/mcp", payload, {"Content-Type": "application/json"})
-        resp = conn.getresponse()
-        raw = resp.read().decode()
-        if resp.status >= 400:
-            raise RuntimeError(f"HTTP {resp.status}: {raw}")
-    finally:
-        conn.close()
-    rpc = json.loads(raw)
+    status, _headers, raw, rpc = _post_mcp(payload)
+    if status >= 400:
+        raise RuntimeError(f"HTTP {status}: {raw[:300]!r}")
+    if rpc is None:
+        try:
+            rpc = json.loads(raw.decode("utf-8"))
+        except Exception as e:
+            raise RuntimeError(f"Could not parse VM response: {e}; body={raw[:200]!r}")
     if "error" in rpc and rpc["error"]:
         raise RuntimeError(f"RPC error: {rpc['error']}")
     result = rpc.get("result") or {}
@@ -385,27 +517,18 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
     payload: bytes | str | dict = request
     if isinstance(payload, dict):
         payload = json.dumps(payload)
-    elif isinstance(payload, str):
+    if isinstance(payload, str):
         payload = payload.encode("utf-8")
 
     try:
-        conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)
-        try:
-            conn.request(
-                "POST",
-                "/mcp",
-                payload,
-                {"Content-Type": "application/json"},
-            )
-            response = conn.getresponse()
-            raw_data = response.read().decode()
-            if response.status >= 400:
-                raise RuntimeError(
-                    f"HTTP {response.status} {response.reason}: {raw_data}"
-                )
-            remote = json.loads(raw_data)
-        finally:
-            conn.close()
+        status, _hdrs, raw_data, remote = _post_mcp(payload)
+        if status >= 400:
+            raise RuntimeError(f"HTTP {status}: {raw_data[:400]!r}")
+        if remote is None:
+            try:
+                remote = json.loads(raw_data.decode("utf-8"))
+            except Exception as e:
+                raise RuntimeError(f"Could not parse VM response: {e}; body={raw_data[:200]!r}")
 
         # For tools/list, append host-local tools to the remote response.
         if method == "tools/list":
